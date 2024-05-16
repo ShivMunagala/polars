@@ -47,6 +47,13 @@ impl ListChunked {
         unsafe { Series::from_chunks_and_dtype_unchecked(self.name(), chunks, &self.inner_dtype()) }
     }
 
+    /// Returns an iterator over the offsets of this chunked array.
+    pub fn iter_offsets(&self) -> impl Iterator<Item = i64> + '_ {
+        self.chu
+        let nested_offsets = self.downcast_iter().map(|arr| arr.offsets().buffer());
+        nested_offsets.flat_map(|buf| buf.iter().map(|v| v + buf.offset() as i64))
+    }
+
     /// Ignore the list indices and apply `func` to the inner type as [`Series`].
     pub fn apply_to_inner(
         &self,

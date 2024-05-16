@@ -265,6 +265,7 @@ fn series_to_numpy_with_copy(py: Python, s: &Series) -> PyResult<PyObject> {
             let values = decimal_to_pyobject_iter(py, ca).map(|v| v.into_py(py));
             PyArray1::from_iter_bound(py, values).into_py(py)
         },
+        List(_) => list_series_to_numpy(py, s),
         Array(_, _) => array_series_to_numpy(py, s),
         #[cfg(feature = "object")]
         Object(_, _) => {
@@ -365,4 +366,20 @@ fn array_series_to_numpy(py: Python, s: &Series) -> PyObject {
         unreachable!()
     };
     reshape_numpy_array(py, np_array_flat, ca.len(), *width)
+}
+/// Convert lists by flattening first, converting the flat Series, and then splitting.
+fn list_series_to_numpy(py: Python, s: &Series) -> PyObject {
+    let ca = s.list().unwrap();
+    let s_inner = ca.get_inner();
+    let np_array_flat = series_to_numpy_with_copy(py, &s_inner).unwrap();
+
+    // Reshape to the original shape.
+    split_numpy_array(py, np_array_flat, ca)
+}
+fn split_numpy_array(py: Python, arr: PyObject, ca: &ListChunked) -> PyObject {
+    let offsets = ca.iter_offsets();
+
+    let values = offsets;
+
+    PyArray1::from_iter_bound(py, values).into_py(py)
 }
