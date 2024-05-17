@@ -58,16 +58,25 @@ impl PySeries {
     /// WARNING: The resulting view will show the underlying value for nulls,
     /// which may be any value. The caller is responsible for handling nulls
     /// appropriately.
-    #[allow(clippy::wrong_self_convention)]
-    pub fn to_numpy_view(&self, py: Python) -> Option<PyObject> {
-        series_to_numpy_view(py, &self.series, true)
+    pub fn to_numpy_view(self, py: Python) -> Option<PyObject> {
+        series_to_numpy_view(py, self.series, true, false)
     }
 }
 
-pub(crate) fn series_to_numpy_view(py: Python, s: &Series, allow_nulls: bool) -> Option<PyObject> {
+pub(crate) fn series_to_numpy_view(
+    py: Python,
+    mut s: Series,
+    allow_nulls: bool,
+    allow_rechunk: bool,
+) -> Option<PyObject> {
     // NumPy arrays are always contiguous
-    if s.n_chunks() > 1 {
-        return None;
+    let is_chunked = s.n_chunks() > 1;
+    if is_chunked {
+        if !allow_rechunk {
+            return None;
+        } else {
+            s = s.rechunk();
+        }
     }
     if !allow_nulls && s.null_count() > 0 {
         return None;
@@ -78,11 +87,17 @@ pub(crate) fn series_to_numpy_view(py: Python, s: &Series, allow_nulls: bool) ->
         DataType::Array(_, _) => array_series_to_numpy_view(py, s, allow_nulls)?,
         _ => return None,
     };
+
+    if is_chunked {
+        // Set array as writable
+        todo!()
+    }
+
     Some(view)
 }
-fn numeric_series_to_numpy_view(py: Python, s: &Series) -> PyObject {
+fn numeric_series_to_numpy_view(py: Python, s: Series) -> PyObject {
     let dims = [s.len()].into_dimension();
-    let owner = PySeries::from(s.clone()).into_py(py); // Keep the Series memory alive.
+    let owner = PySeries::from(s).into_py(py); // Keep the Series memory alive.
     with_match_physical_numeric_polars_type!(s.dtype(), |$T| {
         let np_dtype = <$T as PolarsNumericType>::Native::get_dtype_bound(py);
         let ca: &ChunkedArray<$T> = s.unpack::<$T>().unwrap();
@@ -100,14 +115,14 @@ fn numeric_series_to_numpy_view(py: Python, s: &Series) -> PyObject {
         }
     })
 }
-fn temporal_series_to_numpy_view(py: Python, s: &Series) -> PyObject {
+fn temporal_series_to_numpy_view(py: Python, s: Series) -> PyObject {
     let np_dtype = polars_dtype_to_np_temporal_dtype(py, s.dtype());
 
     let phys = s.to_physical_repr();
     let ca = phys.i64().unwrap();
     let slice = ca.data_views().next().unwrap();
     let dims = [s.len()].into_dimension();
-    let owner = PySeries::from(s.clone()).into_py(py); // Keep the Series memory alive.
+    let owner = PySeries::from(s).into_py(py); // Keep the Series memory alive.
 
     unsafe {
         create_borrowed_np_array::<_>(
@@ -148,10 +163,10 @@ fn polars_dtype_to_np_temporal_dtype<'a>(
         _ => panic!("only Datetime/Duration inputs supported, got {}", dtype),
     }
 }
-fn array_series_to_numpy_view(py: Python, s: &Series, allow_nulls: bool) -> Option<PyObject> {
+fn array_series_to_numpy_view(py: Python, s: Series, allow_nulls: bool) -> Option<PyObject> {
     let ca = s.array().unwrap();
     let s_inner = ca.get_inner();
-    let np_array_flat = series_to_numpy_view(py, &s_inner, allow_nulls)?;
+    let np_array_flat = series_to_numpy_view(py, s_inner, allow_nulls)?;
 
     // Reshape to the original shape.
     let DataType::Array(_, width) = s.dtype() else {
